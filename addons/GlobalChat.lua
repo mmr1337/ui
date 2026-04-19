@@ -243,8 +243,8 @@ function GlobalChat:AddMessage(data)
     local showUsername = self.Settings.ShowUsername
     local showPlace    = self.Settings.ShowPlaceIcon
 
-    local leftOffset = showAvatar and 54 or 10
-    local rowHeight  = showAvatar and 48 or 36
+    local leftOffset = avatarVisible and 54 or 10
+    local rowHeight  = avatarVisible and 48 or 36
 
     local Row = New("Frame", {
         BackgroundColor3 = L.Scheme.MainColor,
@@ -273,9 +273,13 @@ function GlobalChat:AddMessage(data)
         Parent           = Row,
     })
 
+    local mutualReveal = self.Settings.AllowConnect and data.allowConnect
+    local canReveal = mutualReveal or (showUsername and not data.anonymous)
+    local avatarVisible = mutualReveal or (showAvatar and canReveal)
+
     -- Avatar (conditional)
-    if showAvatar then
-        local avatarUrl = showUsername and GetThumbnail(data.userId) or HIDDEN_AVATAR
+    if avatarVisible then
+        local avatarUrl = canReveal and GetThumbnail(data.userId) or HIDDEN_AVATAR
         
         local Av = New("ImageLabel", {
             BackgroundColor3 = L.Scheme.BackgroundColor,
@@ -304,7 +308,7 @@ function GlobalChat:AddMessage(data)
     if showPlace and data.gameId then
         local PlaceIcon = New("ImageLabel", {
             BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(leftOffset, showAvatar and 6 or 4),
+            Position = UDim2.fromOffset(leftOffset, avatarVisible and 6 or 4),
             Size     = UDim2.fromOffset(14, 14),
             Image    = GetPlaceIcon(data.gameId),
             Parent   = Row,
@@ -318,14 +322,14 @@ function GlobalChat:AddMessage(data)
 
     -- Name label
     local displayName
-    if showUsername then
+    if canReveal then
         displayName = data.displayName .. " (@" .. data.username .. ")"
     else
         displayName = HIDDEN_NAME
     end
 
-    local nameY = showAvatar and 5 or 2
-    local msgY  = showAvatar and 22 or 16
+    local nameY = avatarVisible and 5 or 2
+    local msgY  = avatarVisible and 22 or 16
 
     New("TextLabel", {
         BackgroundTransparency = 1,
@@ -365,7 +369,7 @@ function GlobalChat:AddMessage(data)
     New("TextLabel", {
         BackgroundTransparency = 1,
         Position         = UDim2.fromOffset(leftOffset, msgY),
-        Size             = UDim2.new(1, -(leftOffset + 4), 0, showAvatar and 22 or 16),
+        Size             = UDim2.new(1, -(leftOffset + 4), 0, avatarVisible and 22 or 16),
         Text             = data.message,
         TextColor3       = Color3.fromRGB(200, 200, 200),
         TextSize         = 13,
@@ -484,7 +488,8 @@ function GlobalChat:GetPMKey(data)
 end
 
 function GlobalChat:GetPMDisplayName(msg)
-    if msg.fromAnonymous then
+    local mutualReveal = self.Settings.AllowConnect and msg.fromAllowConnect
+    if msg.fromAnonymous and not mutualReveal then
         return HIDDEN_NAME, HIDDEN_AVATAR
     end
     return (msg.fromDisplayName or msg.fromUsername or HIDDEN_NAME) .. (msg.fromUsername and (' (@' .. msg.fromUsername .. ')') or ''), GetThumbnail(msg.fromUserId)
@@ -568,7 +573,7 @@ function GlobalChat:RefreshInboxList()
         return
     end
     for _, entry in ipairs(entries) do
-        local title = entry.last.fromAnonymous and HIDDEN_NAME or ((entry.last.fromDisplayName or entry.last.fromUsername or HIDDEN_NAME) .. (entry.last.fromUsername and (' (@' .. entry.last.fromUsername .. ')') or ''))
+        local title = ((self.Settings.AllowConnect and entry.last.fromAllowConnect) or not entry.last.fromAnonymous) and ((entry.last.fromDisplayName or entry.last.fromUsername or HIDDEN_NAME) .. (entry.last.fromUsername and (' (@' .. entry.last.fromUsername .. ')') or '')) or HIDDEN_NAME
         local unread = pmUnreadCounts[entry.peerId] or 0
         local row = New('TextButton', {
             BackgroundColor3 = L.Scheme.MainColor,
@@ -787,6 +792,7 @@ function GlobalChat:SendPM(peerId, message)
         fromUsername = LP.Name,
         fromDisplayName = LP.DisplayName,
         fromAnonymous = not self.Settings.ShowUsername,
+        fromAllowConnect = self.Settings.AllowConnect,
         message = message,
         timestamp = os.time(),
     }
