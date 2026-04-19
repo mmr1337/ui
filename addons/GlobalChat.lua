@@ -20,6 +20,7 @@ GlobalChat.__index = GlobalChat
 -- ─── Configuration ────────────────────────────────────────────────────────────
 GlobalChat.FirebaseUrl       = "https://apirobloxuser-default-rtdb.firebaseio.com"
 GlobalChat.MessagesPath      = "/globalchat/messages"
+GlobalChat.PMPath            = "/globalchat/pm"
 GlobalChat.MaxMessages       = 50
 GlobalChat.UpdateInterval    = 3
 GlobalChat.BubbleDisplayTime = 10
@@ -34,6 +35,21 @@ GlobalChat.ScrollFrame    = nil
 GlobalChat.TextBox        = nil
 GlobalChat.SendButton     = nil
 
+-- Settings State (defaults: hidden)
+GlobalChat.Settings = {
+    ShowUsername   = false,
+    ShowAvatar    = false,
+    ShowPlaceIcon = false,
+    AllowPM       = false,
+    AllowConnect  = false,
+}
+
+-- Settings Panel State
+GlobalChat.SettingsOpen    = false
+GlobalChat.SettingsFrame   = nil
+GlobalChat.SettingsOverlay = nil
+GlobalChat.SettingsItems   = {}
+
 local request = (syn and syn.request)
     or (http and http.request)
     or http_request
@@ -41,10 +57,16 @@ local request = (syn and syn.request)
     or request
 
 local thumbnailCache   = {}
+local placeIconCache   = {}
 local messageHistory   = {}
 local displayedBubbles = {}
 local lastFetchTime    = 0
 local pollingStarted   = false
+
+-- ─── Constants ────────────────────────────────────────────────────────────────
+local HIDDEN_NAME        = "Secret User"
+local HIDDEN_AVATAR      = "rbxassetid://5107154082"
+local DEFAULT_AVATAR     = "rbxassetid://5107154082"
 
 -- ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -59,9 +81,32 @@ local function GetThumbnail(userId)
             Enum.ThumbnailSize.Size150x150
         )
     end)
-    local url = ok and result or "rbxassetid://5107154082"
+    local url = ok and result or DEFAULT_AVATAR
     thumbnailCache[userId] = url
     return url
+end
+
+local function GetPlaceIcon(placeId)
+    if placeIconCache[placeId] then
+        return placeIconCache[placeId]
+    end
+    local ok, url = pcall(function()
+        local resp = request({
+            Url    = "https://thumbnails.roblox.com/v1/games/icons?universeIds="
+                     .. tostring(game.GameId) .. "&size=150x150&format=Png&isCircular=false",
+            Method = "GET",
+        })
+        if resp and resp.Success and resp.Body then
+            local data = HttpService:JSONDecode(resp.Body)
+            if data and data.data and data.data[1] then
+                return data.data[1].imageUrl
+            end
+        end
+        return nil
+    end)
+    local icon = (ok and url) or DEFAULT_AVATAR
+    placeIconCache[placeId] = icon
+    return icon
 end
 
 local function New(ClassName, Properties)
@@ -75,6 +120,25 @@ local function New(ClassName, Properties)
         Inst.Parent = Properties.Parent
     end
     return Inst
+end
+
+-- ─── Icon Helpers ─────────────────────────────────────────────────────────────
+
+local ICON_SETTINGS = "rbxassetid://7733960981"
+local ICON_BACK     = "rbxassetid://7733658504"
+local ICON_CHECK    = "rbxassetid://7733715400"
+
+local function GetIcon(name)
+    local L = GlobalChat.Library
+    if L and L.Icons and L.Icons[name] then
+        return L.Icons[name]
+    end
+    local map = {
+        ["settings"]    = ICON_SETTINGS,
+        ["arrow-left"]  = ICON_BACK,
+        ["check"]       = ICON_CHECK,
+    }
+    return map[name] or ""
 end
 
 -- ─── 3D Chat Bubble ───────────────────────────────────────────────────────────
@@ -105,7 +169,6 @@ local function Create3DBubble(player, message, timestamp)
         Parent      = head,
     })
 
-    --// gamesense style bubble: тёмный фон, accent border
     local Bg = New("Frame", {
         Size             = UDim2.fromScale(1, 1),
         BackgroundColor3 = Color3.fromRGB(12, 12, 12),
@@ -113,7 +176,6 @@ local function Create3DBubble(player, message, timestamp)
         Parent           = Board,
     })
 
-    --// Accent left line
     New("Frame", {
         BackgroundColor3 = L and L.Scheme.AccentColor or Color3.fromRGB(100, 200, 100),
         Size             = UDim2.new(0, 2, 1, 0),
@@ -121,7 +183,6 @@ local function Create3DBubble(player, message, timestamp)
         Parent           = Bg,
     })
 
-    --// Outline
     New("UIStroke", {
         Color           = Color3.fromRGB(45, 45, 45),
         Thickness       = 1,
@@ -162,16 +223,23 @@ function GlobalChat:AddMessage(data)
     local L  = self.Library
     if not (SF and L) then return end
 
-    --// gamesense style row
+    local showAvatar   = self.Settings.ShowAvatar
+    local showUsername = self.Settings.ShowUsername
+    local showPlace    = self.Settings.ShowPlaceIcon
+
+    local leftOffset = showAvatar and 54 or 10
+    local rowHeight  = showAvatar and 48 or 36
+
     local Row = New("Frame", {
         BackgroundColor3 = L.Scheme.MainColor,
         BorderSizePixel  = 0,
-        Size             = UDim2.new(1, 0, 0, 48),
+        Size             = UDim2.new(1, 0, 0, rowHeight),
         LayoutOrder      = data.timestamp,
+        ClipsDescendants = true,
         Parent           = SF,
     })
 
-    --// Accent left border
+    -- Accent left border
     New("Frame", {
         BackgroundColor3 = L.Scheme.AccentColor,
         Size             = UDim2.new(0, 2, 1, 0),
@@ -179,7 +247,7 @@ function GlobalChat:AddMessage(data)
         Parent           = Row,
     })
 
-    --// Bottom divider line
+    -- Bottom divider
     New("Frame", {
         BackgroundColor3 = L.Scheme.OutlineColor,
         AnchorPoint      = Vector2.new(0, 1),
@@ -189,29 +257,65 @@ function GlobalChat:AddMessage(data)
         Parent           = Row,
     })
 
-    --// Avatar
-    local Av = New("ImageLabel", {
-        BackgroundColor3 = L.Scheme.BackgroundColor,
-        Position         = UDim2.fromOffset(8, 4),
-        Size             = UDim2.fromOffset(40, 40),
-        Image            = GetThumbnail(data.userId),
-        BorderSizePixel  = 0,
-        Parent           = Row,
-    })
+    -- Avatar (conditional)
+    if showAvatar then
+        local avatarUrl = showUsername and GetThumbnail(data.userId) or HIDDEN_AVATAR
+        
+        local Av = New("ImageLabel", {
+            BackgroundColor3 = L.Scheme.BackgroundColor,
+            Position         = UDim2.fromOffset(8, 4),
+            Size             = UDim2.fromOffset(40, 40),
+            Image            = avatarUrl,
+            BorderSizePixel  = 0,
+            Parent           = Row,
+        })
 
-    New("UIStroke", {
-        Color           = L.Scheme.OutlineColor,
-        Thickness       = 1,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        Parent          = Av,
-    })
+        New("UIStroke", {
+            Color           = L.Scheme.OutlineColor,
+            Thickness       = 1,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+            Parent          = Av,
+        })
 
-    --// Name label — accent color
+        New("UICorner", {
+            CornerRadius = UDim.new(0, 4),
+            Parent       = Av,
+        })
+    end
+
+    -- Place icon (small, next to name)
+    local nameOffset = leftOffset
+    if showPlace and data.gameId then
+        local PlaceIcon = New("ImageLabel", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(leftOffset, showAvatar and 6 or 4),
+            Size     = UDim2.fromOffset(14, 14),
+            Image    = GetPlaceIcon(data.gameId),
+            Parent   = Row,
+        })
+        New("UICorner", {
+            CornerRadius = UDim.new(0, 2),
+            Parent       = PlaceIcon,
+        })
+        nameOffset = nameOffset + 18
+    end
+
+    -- Name label
+    local displayName
+    if showUsername then
+        displayName = data.displayName .. " (@" .. data.username .. ")"
+    else
+        displayName = HIDDEN_NAME
+    end
+
+    local nameY = showAvatar and 5 or 2
+    local msgY  = showAvatar and 22 or 16
+
     New("TextLabel", {
         BackgroundTransparency = 1,
-        Position         = UDim2.fromOffset(54, 5),
-        Size             = UDim2.new(1, -58, 0, 16),
-        Text             = data.displayName .. " (@" .. data.username .. ")",
+        Position         = UDim2.fromOffset(nameOffset, nameY),
+        Size             = UDim2.new(1, -(nameOffset + 4), 0, 16),
+        Text             = displayName,
         TextColor3       = L.Scheme.AccentColor,
         TextSize         = 12,
         Font             = Enum.Font.Code,
@@ -220,11 +324,11 @@ function GlobalChat:AddMessage(data)
         Parent           = Row,
     })
 
-    --// Message text
+    -- Message text
     New("TextLabel", {
         BackgroundTransparency = 1,
-        Position         = UDim2.fromOffset(54, 22),
-        Size             = UDim2.new(1, -58, 0, 22),
+        Position         = UDim2.fromOffset(leftOffset, msgY),
+        Size             = UDim2.new(1, -(leftOffset + 4), 0, showAvatar and 22 or 16),
         Text             = data.message,
         TextColor3       = Color3.fromRGB(200, 200, 200),
         TextSize         = 13,
@@ -235,7 +339,7 @@ function GlobalChat:AddMessage(data)
         Parent           = Row,
     })
 
-    --// Trim old rows
+    -- Trim old rows
     local rows = {}
     for _, c in ipairs(SF:GetChildren()) do
         if c:IsA("Frame") then
@@ -250,11 +354,27 @@ function GlobalChat:AddMessage(data)
     end
 end
 
+-- ─── Rebuild Messages ───────────────────────────────────────────────────────
+
+function GlobalChat:ClearAndRefetch()
+    if self.ScrollFrame then
+        for _, c in ipairs(self.ScrollFrame:GetChildren()) do
+            if c:IsA("Frame") then
+                c:Destroy()
+            end
+        end
+    end
+    messageHistory = {}
+    self:FetchAndUpdate()
+end
+
 -- ─── Firebase ────────────────────────────────────────────────────────────────
 
 function GlobalChat:SendMessage(message)
     if not request then return end
     local LP = Players.LocalPlayer
+    
+    -- Always send real data to Firebase — display is controlled locally
     local data = {
         userId      = LP.UserId,
         username    = LP.Name,
@@ -262,6 +382,8 @@ function GlobalChat:SendMessage(message)
         message     = message,
         timestamp   = os.time(),
         gameId      = game.PlaceId,
+        allowPM     = self.Settings.AllowPM,
+        allowConnect = self.Settings.AllowConnect,
     }
     task.spawn(function()
         local ok = pcall(function()
@@ -313,13 +435,343 @@ function GlobalChat:FetchAndUpdate()
     end
 end
 
+-- ─── Settings Panel ──────────────────────────────────────────────────────────
+
+function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callback)
+    local L = self.Library
+
+    local Container = New("Frame", {
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 0, 0, yPos),
+        Size     = UDim2.new(1, 0, 0, 30),
+        Parent   = parent,
+        GroupTransparency = 1,
+        Visible  = false,
+    })
+
+    -- Toggle background
+    local ToggleBg = New("Frame", {
+        BackgroundColor3 = self.Settings[settingKey]
+            and L.Scheme.AccentColor
+            or Color3.fromRGB(40, 40, 40),
+        Position        = UDim2.new(1, -42, 0.5, -8),
+        Size            = UDim2.fromOffset(36, 16),
+        BorderSizePixel = 0,
+        Parent          = Container,
+    })
+
+    New("UICorner", {
+        CornerRadius = UDim.new(0, 8),
+        Parent       = ToggleBg,
+    })
+
+    New("UIStroke", {
+        Color           = L.Scheme.OutlineColor,
+        Thickness       = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        Parent          = ToggleBg,
+    })
+
+    -- Toggle knob
+    local Knob = New("Frame", {
+        BackgroundColor3 = Color3.fromRGB(200, 200, 200),
+        Position         = self.Settings[settingKey]
+            and UDim2.new(1, -14, 0.5, -6)
+            or UDim2.new(0, 2, 0.5, -6),
+        Size             = UDim2.fromOffset(12, 12),
+        BorderSizePixel  = 0,
+        Parent           = ToggleBg,
+    })
+
+    New("UICorner", {
+        CornerRadius = UDim.new(1, 0),
+        Parent       = Knob,
+    })
+
+    -- Label
+    New("TextLabel", {
+        BackgroundTransparency = 1,
+        Position         = UDim2.fromOffset(10, 0),
+        Size             = UDim2.new(1, -56, 1, 0),
+        Text             = text,
+        TextColor3       = L.Scheme.FontColor,
+        TextSize         = 12,
+        Font             = Enum.Font.Code,
+        TextXAlignment   = Enum.TextXAlignment.Left,
+        Parent           = Container,
+    })
+
+    -- Divider
+    New("Frame", {
+        BackgroundColor3 = L.Scheme.OutlineColor,
+        AnchorPoint      = Vector2.new(0, 1),
+        Position         = UDim2.fromScale(0, 1),
+        Size             = UDim2.new(1, 0, 0, 1),
+        BorderSizePixel  = 0,
+        Parent           = Container,
+    })
+
+    -- Click handler
+    local btn = New("TextButton", {
+        BackgroundTransparency = 1,
+        Size     = UDim2.fromScale(1, 1),
+        Text     = "",
+        ZIndex   = 5,
+        Parent   = Container,
+    })
+
+    btn.MouseButton1Click:Connect(function()
+        self.Settings[settingKey] = not self.Settings[settingKey]
+        local enabled = self.Settings[settingKey]
+
+        TweenService:Create(Knob, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Position = enabled
+                and UDim2.new(1, -14, 0.5, -6)
+                or UDim2.new(0, 2, 0.5, -6),
+        }):Play()
+
+        TweenService:Create(ToggleBg, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            BackgroundColor3 = enabled
+                and L.Scheme.AccentColor
+                or Color3.fromRGB(40, 40, 40),
+        }):Play()
+
+        if callback then callback(enabled) end
+    end)
+
+    table.insert(self.SettingsItems, Container)
+    return Container
+end
+
+function GlobalChat:ToggleSettings()
+    local L = self.Library
+    if not L then return end
+
+    if self.SettingsOpen then
+        -- ─── Close Settings ───
+        self.SettingsOpen = false
+
+        -- Fade out items first
+        for i, item in ipairs(self.SettingsItems) do
+            task.delay((i - 1) * 0.03, function()
+                if item and item.Parent then
+                    TweenService:Create(item, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                        GroupTransparency = 1,
+                    }):Play()
+                end
+            end)
+        end
+
+        task.delay(#self.SettingsItems * 0.03 + 0.1, function()
+            if self.SettingsOverlay and self.SettingsOverlay.Parent then
+                local tween = TweenService:Create(self.SettingsOverlay, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                    Position = UDim2.new(0, 0, 0, -self.ChatWindow.AbsoluteSize.Y),
+                })
+                tween:Play()
+                tween.Completed:Wait()
+                if self.SettingsOverlay and self.SettingsOverlay.Parent then
+                    self.SettingsOverlay.Visible = false
+                end
+            end
+        end)
+    else
+        -- ─── Open Settings ───
+        self.SettingsOpen = true
+
+        if not self.SettingsOverlay then
+            self:BuildSettingsPanel()
+        end
+
+        local overlay = self.SettingsOverlay
+        overlay.Visible = true
+        overlay.Position = UDim2.new(0, 0, 0, -self.ChatWindow.AbsoluteSize.Y)
+
+        -- Hide all items initially
+        for _, item in ipairs(self.SettingsItems) do
+            if item and item.Parent then
+                item.Visible = false
+                item.GroupTransparency = 1
+            end
+        end
+
+        -- Slide in
+        local slideTween = TweenService:Create(overlay, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            Position = UDim2.new(0, 0, 0, 0),
+        })
+        slideTween:Play()
+        slideTween.Completed:Wait()
+
+        -- Reveal items one by one
+        for i, item in ipairs(self.SettingsItems) do
+            task.delay((i - 1) * 0.06, function()
+                if item and item.Parent then
+                    item.Visible = true
+                    TweenService:Create(item, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                        GroupTransparency = 0,
+                    }):Play()
+                end
+            end)
+        end
+    end
+end
+
+function GlobalChat:BuildSettingsPanel()
+    local L = self.Library
+    self.SettingsItems = {}
+
+    local overlay = New("Frame", {
+        BackgroundColor3 = L.Scheme.BackgroundColor,
+        BorderSizePixel  = 0,
+        Position         = UDim2.new(0, 0, 0, 0),
+        Size             = UDim2.fromScale(1, 1),
+        ZIndex           = 10,
+        ClipsDescendants = true,
+        Visible          = false,
+        Parent           = self.ChatWindow,
+    })
+
+    New("UIStroke", {
+        Color           = L.Scheme.OutlineColor,
+        Thickness       = 1,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        Parent          = overlay,
+    })
+
+    -- Settings Title Bar
+    local sTitleBar = New("Frame", {
+        BackgroundColor3 = L.Scheme.MainColor,
+        BorderSizePixel  = 0,
+        Size             = UDim2.new(1, 0, 0, 28),
+        ZIndex           = 11,
+        Parent           = overlay,
+    })
+
+    New("Frame", {
+        BackgroundColor3 = L.Scheme.OutlineColor,
+        AnchorPoint      = Vector2.new(0, 1),
+        Position         = UDim2.fromScale(0, 1),
+        Size             = UDim2.new(1, 0, 0, 1),
+        BorderSizePixel  = 0,
+        ZIndex           = 11,
+        Parent           = sTitleBar,
+    })
+
+    -- Accent top line
+    New("Frame", {
+        BackgroundColor3 = L.Scheme.AccentColor,
+        Size             = UDim2.new(1, 0, 0, 2),
+        BorderSizePixel  = 0,
+        ZIndex           = 12,
+        Parent           = overlay,
+    })
+
+    -- Back button
+    local BackBtn = New("TextButton", {
+        BackgroundTransparency = 1,
+        Position  = UDim2.fromOffset(4, 2),
+        Size      = UDim2.fromOffset(24, 24),
+        Text      = "",
+        ZIndex    = 12,
+        Parent    = sTitleBar,
+    })
+
+    local backIcon = New("ImageLabel", {
+        BackgroundTransparency = 1,
+        Size     = UDim2.fromOffset(16, 16),
+        Position = UDim2.fromOffset(4, 4),
+        Image    = GetIcon("arrow-left"),
+        ImageColor3 = L.Scheme.FontColor,
+        ZIndex   = 12,
+        Parent   = BackBtn,
+    })
+
+    BackBtn.MouseEnter:Connect(function()
+        TweenService:Create(backIcon, TweenInfo.new(0.1), {
+            ImageColor3 = L.Scheme.AccentColor,
+        }):Play()
+    end)
+    BackBtn.MouseLeave:Connect(function()
+        TweenService:Create(backIcon, TweenInfo.new(0.1), {
+            ImageColor3 = L.Scheme.FontColor,
+        }):Play()
+    end)
+
+    BackBtn.MouseButton1Click:Connect(function()
+        self:ToggleSettings()
+    end)
+
+    -- Settings title
+    New("TextLabel", {
+        BackgroundTransparency = 1,
+        Position         = UDim2.fromOffset(32, 0),
+        Size             = UDim2.new(1, -36, 1, 0),
+        Text             = "Chat Settings",
+        TextColor3       = L.Scheme.FontColor,
+        TextSize         = 13,
+        Font             = Enum.Font.Code,
+        TextXAlignment   = Enum.TextXAlignment.Left,
+        ZIndex           = 11,
+        Parent           = sTitleBar,
+    })
+
+    -- Settings content area
+    local content = New("Frame", {
+        BackgroundTransparency = 1,
+        Position = UDim2.fromOffset(0, 30),
+        Size     = UDim2.new(1, 0, 1, -30),
+        ZIndex   = 10,
+        Parent   = overlay,
+    })
+
+    -- ─── Toggle Items ───
+    local yOffset = 8
+
+    self:CreateSettingsToggle(content, yOffset, "Show Username & Avatar", "ShowUsername", function(val)
+        -- When username is shown, also enable avatar; when hidden, also hide avatar
+        if not val then
+            self.Settings.ShowAvatar = false
+        end
+        self:ClearAndRefetch()
+    end)
+    yOffset = yOffset + 34
+
+    self:CreateSettingsToggle(content, yOffset, "Show Avatar", "ShowAvatar", function(val)
+        -- Avatar can only be shown if username is also shown
+        if val and not self.Settings.ShowUsername then
+            self.Settings.ShowAvatar = false
+            return
+        end
+        self:ClearAndRefetch()
+    end)
+    yOffset = yOffset + 34
+
+    self:CreateSettingsToggle(content, yOffset, "Show Place Icon", "ShowPlaceIcon", function(val)
+        self:ClearAndRefetch()
+    end)
+    yOffset = yOffset + 34
+
+    self:CreateSettingsToggle(content, yOffset, "Allow PM Messages", "AllowPM", function(val)
+        -- Flag is sent with next message
+    end)
+    yOffset = yOffset + 34
+
+    self:CreateSettingsToggle(content, yOffset, "Allow Connect to Server", "AllowConnect", function(val)
+        -- Flag is sent with next message
+    end)
+
+    self.SettingsOverlay = overlay
+
+    -- Registry
+    L:AddToRegistry(overlay, { BackgroundColor3 = "BackgroundColor" })
+    L:AddToRegistry(sTitleBar, { BackgroundColor3 = "MainColor" })
+end
+
 -- ─── Chat Window ─────────────────────────────────────────────────────────────
 
 function GlobalChat:CreateWindow()
     local L = self.Library
     if not L then return end
 
-    --// Создаём отдельный ScreenGui
     if not self.ScreenGui then
         local SG = Instance.new("ScreenGui")
         SG.Name           = "GlobalChatGui"
@@ -341,18 +793,17 @@ function GlobalChat:CreateWindow()
 
     local SG = self.ScreenGui
 
-    --// UIScale — берём из либы
     local Scale = Instance.new("UIScale")
     Scale.Scale  = L.DPIScale
     Scale.Parent = SG
     table.insert(L.Scales, Scale)
 
-    --// Основной фрейм окна чата — gamesense стиль
     local ChatFrame = New("Frame", {
         BackgroundColor3 = L.Scheme.BackgroundColor,
         BorderSizePixel  = 0,
         Position         = UDim2.new(1, -375, 1, -310),
         Size             = UDim2.fromOffset(360, 300),
+        ClipsDescendants = true,
         Parent           = SG,
     })
 
@@ -361,7 +812,6 @@ function GlobalChat:CreateWindow()
         ChatFrame.Position = UDim2.fromOffset(6, 6)
     end
 
-    --// Outline
     New("UIStroke", {
         Color           = L.Scheme.OutlineColor,
         Thickness       = 1,
@@ -369,7 +819,7 @@ function GlobalChat:CreateWindow()
         Parent          = ChatFrame,
     })
 
-    --// Accent top line
+    -- Accent top line
     New("Frame", {
         BackgroundColor3 = L.Scheme.AccentColor,
         Size             = UDim2.new(1, 0, 0, 2),
@@ -378,7 +828,7 @@ function GlobalChat:CreateWindow()
         Parent           = ChatFrame,
     })
 
-    --// Title bar
+    -- Title bar
     local TitleBar = New("Frame", {
         BackgroundColor3 = L.Scheme.MainColor,
         BorderSizePixel  = 0,
@@ -386,7 +836,6 @@ function GlobalChat:CreateWindow()
         Parent           = ChatFrame,
     })
 
-    --// Bottom line под title
     New("Frame", {
         BackgroundColor3 = L.Scheme.OutlineColor,
         AnchorPoint      = Vector2.new(0, 1),
@@ -396,10 +845,10 @@ function GlobalChat:CreateWindow()
         Parent           = TitleBar,
     })
 
-    --// Title label
+    -- Title label
     New("TextLabel", {
         BackgroundTransparency = 1,
-        Size             = UDim2.new(1, -40, 1, 0),
+        Size             = UDim2.new(1, -80, 1, 0),
         Position         = UDim2.fromOffset(8, 0),
         Text             = "Global Chat",
         TextColor3       = L.Scheme.FontColor,
@@ -409,7 +858,47 @@ function GlobalChat:CreateWindow()
         Parent           = TitleBar,
     })
 
-    --// Online count label
+    -- ─── Settings Button (with icon) ───
+    local SettingsBtn = New("TextButton", {
+        BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position    = UDim2.new(1, -70, 0.5, 0),
+        Size        = UDim2.fromOffset(24, 24),
+        Text        = "",
+        Parent      = TitleBar,
+    })
+
+    local settingsIcon = New("ImageLabel", {
+        BackgroundTransparency = 1,
+        Size        = UDim2.fromOffset(16, 16),
+        Position    = UDim2.fromOffset(4, 4),
+        Image       = GetIcon("settings"),
+        ImageColor3 = L.Scheme.FontColor,
+        Parent      = SettingsBtn,
+    })
+
+    SettingsBtn.MouseEnter:Connect(function()
+        TweenService:Create(settingsIcon, TweenInfo.new(0.15), {
+            ImageColor3 = L.Scheme.AccentColor,
+        }):Play()
+        TweenService:Create(settingsIcon, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+            Rotation = 45,
+        }):Play()
+    end)
+    SettingsBtn.MouseLeave:Connect(function()
+        TweenService:Create(settingsIcon, TweenInfo.new(0.15), {
+            ImageColor3 = L.Scheme.FontColor,
+        }):Play()
+        TweenService:Create(settingsIcon, TweenInfo.new(0.3, Enum.EasingStyle.Quad), {
+            Rotation = 0,
+        }):Play()
+    end)
+
+    SettingsBtn.MouseButton1Click:Connect(function()
+        self:ToggleSettings()
+    end)
+
+    -- Online count label
     local OnlineLabel = New("TextLabel", {
         BackgroundTransparency = 1,
         AnchorPoint      = Vector2.new(1, 0.5),
@@ -423,7 +912,7 @@ function GlobalChat:CreateWindow()
         Parent           = TitleBar,
     })
 
-    --// Draggable за title bar
+    -- Draggable
     do
         local StartPos
         local FramePos
@@ -466,12 +955,13 @@ function GlobalChat:CreateWindow()
         end)
     end
 
-    --// Messages area
+    -- Messages area
     local MsgArea = New("Frame", {
         BackgroundColor3 = L.Scheme.BackgroundColor,
         BorderSizePixel  = 0,
         Position         = UDim2.fromOffset(0, 29),
         Size             = UDim2.new(1, 0, 1, -75),
+        ClipsDescendants = true,
         Parent           = ChatFrame,
     })
 
@@ -500,12 +990,11 @@ function GlobalChat:CreateWindow()
         Parent    = SF,
     })
 
-    --// Автопрокрутка вниз
     Layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
         SF.CanvasPosition = Vector2.new(0, SF.AbsoluteCanvasSize.Y)
     end)
 
-    --// Input area
+    -- Input area
     local InputArea = New("Frame", {
         BackgroundColor3 = L.Scheme.MainColor,
         BorderSizePixel  = 0,
@@ -515,7 +1004,6 @@ function GlobalChat:CreateWindow()
         Parent           = ChatFrame,
     })
 
-    --// Top line над инпутом
     New("Frame", {
         BackgroundColor3 = L.Scheme.OutlineColor,
         Size             = UDim2.new(1, 0, 0, 1),
@@ -523,7 +1011,6 @@ function GlobalChat:CreateWindow()
         Parent           = InputArea,
     })
 
-    --// TextBox
     local TB = New("TextBox", {
         BackgroundColor3   = L.Scheme.BackgroundColor,
         BorderSizePixel    = 0,
@@ -553,7 +1040,6 @@ function GlobalChat:CreateWindow()
         Parent          = TB,
     })
 
-    --// Send button — accent цвет как gamesense кнопка
     local SendBtn = New("TextButton", {
         BackgroundColor3 = L.Scheme.AccentColor,
         BorderSizePixel  = 0,
@@ -575,7 +1061,6 @@ function GlobalChat:CreateWindow()
         Parent          = SendBtn,
     })
 
-    --// Hover эффект на кнопку
     SendBtn.MouseEnter:Connect(function()
         TweenService:Create(SendBtn, TweenInfo.new(0.1), {
             BackgroundColor3 = Color3.fromRGB(
@@ -591,7 +1076,6 @@ function GlobalChat:CreateWindow()
         }):Play()
     end)
 
-    --// Send logic
     local function DoSend()
         local msg = TB.Text:match("^%s*(.-)%s*$")
         if not msg or msg == "" then return end
@@ -604,14 +1088,14 @@ function GlobalChat:CreateWindow()
         if Enter then DoSend() end
     end)
 
-    --// Сохраняем ссылки
+    -- Save references
     self.ChatWindow  = ChatFrame
     self.ScrollFrame = SF
     self.TextBox     = TB
     self.SendButton  = SendBtn
     self.OnlineLabel = OnlineLabel
 
-    --// Registry для автообновления цветов
+    -- Registry
     L:AddToRegistry(ChatFrame, { BackgroundColor3 = "BackgroundColor" })
     L:AddToRegistry(TitleBar, { BackgroundColor3 = "MainColor" })
     L:AddToRegistry(MsgArea, { BackgroundColor3 = "BackgroundColor" })
@@ -630,7 +1114,6 @@ function GlobalChat:StartPolling()
     if pollingStarted then return end
     pollingStarted = true
 
-    --// Fetch loop
     task.spawn(function()
         while true do
             local now = tick()
@@ -642,7 +1125,6 @@ function GlobalChat:StartPolling()
         end
     end)
 
-    --// Синхронизация видимости с основным меню
     local L = self.Library
     task.spawn(function()
         while true do
@@ -656,7 +1138,6 @@ function GlobalChat:StartPolling()
         end
     end)
 
-    --// Обновление онлайн счётчика
     task.spawn(function()
         while true do
             task.wait(10)
@@ -669,7 +1150,6 @@ function GlobalChat:StartPolling()
         end
     end)
 
-    --// Cleanup старых bubbles
     task.spawn(function()
         while true do
             task.wait(30)
@@ -683,7 +1163,6 @@ function GlobalChat:StartPolling()
         end
     end)
 
-    --// Bubble для новых игроков
     Players.PlayerAdded:Connect(function(pl)
         pl.CharacterAdded:Connect(function()
             task.wait(1)
