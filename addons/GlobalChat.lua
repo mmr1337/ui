@@ -440,7 +440,7 @@ end
 function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callback)
     local L = self.Library
 
-    local Container = New("Frame", {
+    local Container = New("CanvasGroup", {
         BackgroundTransparency = 1,
         Position = UDim2.new(0, 0, 0, yPos),
         Size     = UDim2.new(1, 0, 0, 30),
@@ -727,7 +727,6 @@ function GlobalChat:BuildSettingsPanel()
     local yOffset = 8
 
     self:CreateSettingsToggle(content, yOffset, "Show Username & Avatar", "ShowUsername", function(val)
-        -- When username is shown, also enable avatar; when hidden, also hide avatar
         if not val then
             self.Settings.ShowAvatar = false
         end
@@ -736,7 +735,6 @@ function GlobalChat:BuildSettingsPanel()
     yOffset = yOffset + 34
 
     self:CreateSettingsToggle(content, yOffset, "Show Avatar", "ShowAvatar", function(val)
-        -- Avatar can only be shown if username is also shown
         if val and not self.Settings.ShowUsername then
             self.Settings.ShowAvatar = false
             return
@@ -751,12 +749,10 @@ function GlobalChat:BuildSettingsPanel()
     yOffset = yOffset + 34
 
     self:CreateSettingsToggle(content, yOffset, "Allow PM Messages", "AllowPM", function(val)
-        -- Flag is sent with next message
     end)
     yOffset = yOffset + 34
 
     self:CreateSettingsToggle(content, yOffset, "Allow Connect to Server", "AllowConnect", function(val)
-        -- Flag is sent with next message
     end)
 
     self.SettingsOverlay = overlay
