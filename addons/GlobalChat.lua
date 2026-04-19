@@ -243,8 +243,12 @@ function GlobalChat:AddMessage(data)
     local showUsername = self.Settings.ShowUsername
     local showPlace    = self.Settings.ShowPlaceIcon
 
-    local leftOffset = avatarVisible and 54 or 10
-    local rowHeight  = avatarVisible and 48 or 36
+    local mutualReveal = self.Settings.AllowConnect and data.allowConnect
+    local canReveal = mutualReveal or (showUsername and not data.anonymous)
+    local avatarVisible = mutualReveal or (showAvatar and canReveal)
+
+    local leftOffset = avatarVisible and 44 or 10
+    local rowHeight  = avatarVisible and 44 or 30
 
     local Row = New("Frame", {
         BackgroundColor3 = L.Scheme.MainColor,
@@ -255,15 +259,13 @@ function GlobalChat:AddMessage(data)
         Parent           = SF,
     })
 
-    -- Accent left border
     New("Frame", {
         BackgroundColor3 = L.Scheme.AccentColor,
-        Size             = UDim2.new(0, 2, 1, 0),
+        Size             = UDim2.new(0, 1, 1, 0),
         BorderSizePixel  = 0,
         Parent           = Row,
     })
 
-    -- Bottom divider
     New("Frame", {
         BackgroundColor3 = L.Scheme.OutlineColor,
         AnchorPoint      = Vector2.new(0, 1),
@@ -273,68 +275,42 @@ function GlobalChat:AddMessage(data)
         Parent           = Row,
     })
 
-    local mutualReveal = self.Settings.AllowConnect and data.allowConnect
-    local canReveal = mutualReveal or (showUsername and not data.anonymous)
-    local avatarVisible = mutualReveal or (showAvatar and canReveal)
-
-    -- Avatar (conditional)
     if avatarVisible then
         local avatarUrl = canReveal and GetThumbnail(data.userId) or HIDDEN_AVATAR
-        
         local Av = New("ImageLabel", {
             BackgroundColor3 = L.Scheme.BackgroundColor,
-            Position         = UDim2.fromOffset(8, 4),
-            Size             = UDim2.fromOffset(40, 40),
+            Position         = UDim2.fromOffset(8, 8),
+            Size             = UDim2.fromOffset(24, 24),
             Image            = avatarUrl,
             BorderSizePixel  = 0,
             Parent           = Row,
         })
-
         New("UIStroke", {
             Color           = L.Scheme.OutlineColor,
             Thickness       = 1,
             ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
             Parent          = Av,
         })
-
-        New("UICorner", {
-            CornerRadius = UDim.new(0, 4),
-            Parent       = Av,
-        })
     end
 
-    -- Place icon (small, next to name)
     local nameOffset = leftOffset
     if showPlace and data.gameId then
         local PlaceIcon = New("ImageLabel", {
             BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(leftOffset, avatarVisible and 6 or 4),
-            Size     = UDim2.fromOffset(14, 14),
+            Position = UDim2.fromOffset(leftOffset, 6),
+            Size     = UDim2.fromOffset(12, 12),
             Image    = GetPlaceIcon(data.gameId),
             Parent   = Row,
         })
-        New("UICorner", {
-            CornerRadius = UDim.new(0, 2),
-            Parent       = PlaceIcon,
-        })
-        nameOffset = nameOffset + 18
+        nameOffset = nameOffset + 16
     end
 
-    -- Name label
-    local displayName
-    if canReveal then
-        displayName = data.displayName .. " (@" .. data.username .. ")"
-    else
-        displayName = HIDDEN_NAME
-    end
-
-    local nameY = avatarVisible and 5 or 2
-    local msgY  = avatarVisible and 22 or 16
+    local displayName = canReveal and (data.displayName .. " (@" .. data.username .. ")") or HIDDEN_NAME
 
     New("TextLabel", {
         BackgroundTransparency = 1,
-        Position         = UDim2.fromOffset(nameOffset, nameY),
-        Size             = UDim2.new(1, -(nameOffset + 44), 0, 16),
+        Position         = UDim2.fromOffset(nameOffset, 5),
+        Size             = UDim2.new(1, -(nameOffset + 44), 0, 14),
         Text             = displayName,
         TextColor3       = L.Scheme.AccentColor,
         TextSize         = 12,
@@ -349,8 +325,8 @@ function GlobalChat:AddMessage(data)
             BackgroundColor3 = L.Scheme.BackgroundColor,
             BorderSizePixel  = 0,
             AnchorPoint      = Vector2.new(1, 0),
-            Position         = UDim2.new(1, -8, 0, nameY - 1),
-            Size             = UDim2.fromOffset(34, 16),
+            Position         = UDim2.new(1, -6, 0, 4),
+            Size             = UDim2.fromOffset(30, 14),
             Text             = "PM",
             TextColor3       = L.Scheme.FontColor,
             TextSize         = 11,
@@ -359,28 +335,25 @@ function GlobalChat:AddMessage(data)
             Parent           = Row,
         })
         New("UIStroke", { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = PMBtn })
-        New("UICorner", { CornerRadius = UDim.new(0, 3), Parent = PMBtn })
         PMBtn.MouseButton1Click:Connect(function()
             self:OpenPM(data.userId)
         end)
     end
 
-    -- Message text
     New("TextLabel", {
         BackgroundTransparency = 1,
-        Position         = UDim2.fromOffset(leftOffset, msgY),
-        Size             = UDim2.new(1, -(leftOffset + 4), 0, avatarVisible and 22 or 16),
+        Position         = UDim2.fromOffset(leftOffset, avatarVisible and 22 or 15),
+        Size             = UDim2.new(1, -(leftOffset + 8), 0, 14),
         Text             = data.message,
         TextColor3       = Color3.fromRGB(200, 200, 200),
-        TextSize         = 13,
+        TextSize         = 12,
         Font             = Enum.Font.Code,
         TextXAlignment   = Enum.TextXAlignment.Left,
-        TextWrapped      = true,
-        ClipsDescendants = true,
+        TextWrapped      = false,
+        TextTruncate     = Enum.TextTruncate.AtEnd,
         Parent           = Row,
     })
 
-    -- Trim old rows
     local rows = {}
     for _, c in ipairs(SF:GetChildren()) do
         if c:IsA("Frame") then
@@ -865,7 +838,6 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Parent   = parent,
         GroupTransparency = 1,
         Visible  = false,
-        ZIndex   = 11,
     })
 
     -- Toggle background
@@ -877,7 +849,6 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size            = UDim2.fromOffset(36, 16),
         BorderSizePixel = 0,
         Parent          = Container,
-        ZIndex          = 12,
     })
 
     New("UICorner", {
@@ -901,7 +872,6 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size             = UDim2.fromOffset(12, 12),
         BorderSizePixel  = 0,
         Parent           = ToggleBg,
-        ZIndex           = 13,
     })
 
     New("UICorner", {
@@ -920,7 +890,6 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Font             = Enum.Font.Code,
         TextXAlignment   = Enum.TextXAlignment.Left,
         Parent           = Container,
-        ZIndex           = 12,
     })
 
     -- Divider
@@ -931,7 +900,6 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size             = UDim2.new(1, 0, 0, 1),
         BorderSizePixel  = 0,
         Parent           = Container,
-        ZIndex           = 11,
     })
 
     -- Click handler
@@ -939,7 +907,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         BackgroundTransparency = 1,
         Size     = UDim2.fromScale(1, 1),
         Text     = "",
-        ZIndex   = 14,
+        ZIndex   = 5,
         Parent   = Container,
     })
 
@@ -1279,16 +1247,19 @@ function GlobalChat:CreateWindow()
 
 
     local InboxBtn = New("TextButton", {
-        BackgroundTransparency = 1,
+        BackgroundColor3 = L.Scheme.BackgroundColor,
+        BorderSizePixel  = 0,
         AnchorPoint = Vector2.new(1, 0.5),
         Position    = UDim2.new(1, -96, 0.5, 0),
-        Size        = UDim2.fromOffset(24, 24),
+        Size        = UDim2.fromOffset(18, 18),
         Text        = "✉",
         TextColor3  = L.Scheme.FontColor,
-        TextSize    = 15,
+        TextSize    = 12,
         Font        = Enum.Font.Code,
+        AutoButtonColor = false,
         Parent      = TitleBar,
     })
+    New("UIStroke", { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = InboxBtn })
 
     local InboxBadge = New("TextLabel", {
         BackgroundColor3 = L.Scheme.AccentColor,
@@ -1307,18 +1278,21 @@ function GlobalChat:CreateWindow()
 
     -- ─── Settings Button (with icon) ───
     local SettingsBtn = New("TextButton", {
-        BackgroundTransparency = 1,
+        BackgroundColor3 = L.Scheme.BackgroundColor,
+        BorderSizePixel  = 0,
         AnchorPoint = Vector2.new(1, 0.5),
-        Position    = UDim2.new(1, -70, 0.5, 0),
-        Size        = UDim2.fromOffset(24, 24),
+        Position    = UDim2.new(1, -72, 0.5, 0),
+        Size        = UDim2.fromOffset(18, 18),
         Text        = "",
+        AutoButtonColor = false,
         Parent      = TitleBar,
     })
+    New("UIStroke", { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = SettingsBtn })
 
     local settingsIcon = New("ImageLabel", {
         BackgroundTransparency = 1,
-        Size        = UDim2.fromOffset(16, 16),
-        Position    = UDim2.fromOffset(4, 4),
+        Size        = UDim2.fromOffset(12, 12),
+        Position    = UDim2.fromOffset(3, 3),
         Image       = GetIcon("settings"),
         ImageColor3 = L.Scheme.FontColor,
         Parent      = SettingsBtn,
@@ -1354,7 +1328,7 @@ function GlobalChat:CreateWindow()
         BackgroundTransparency = 1,
         AnchorPoint      = Vector2.new(1, 0.5),
         Position         = UDim2.new(1, -8, 0.5, 0),
-        Size             = UDim2.fromOffset(60, 20),
+        Size             = UDim2.fromOffset(72, 20),
         Text             = "● online",
         TextColor3       = L.Scheme.AccentColor,
         TextSize         = 11,
