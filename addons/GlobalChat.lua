@@ -865,6 +865,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Parent   = parent,
         GroupTransparency = 1,
         Visible  = false,
+        ZIndex   = 11,
     })
 
     -- Toggle background
@@ -876,6 +877,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size            = UDim2.fromOffset(36, 16),
         BorderSizePixel = 0,
         Parent          = Container,
+        ZIndex          = 12,
     })
 
     New("UICorner", {
@@ -899,6 +901,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size             = UDim2.fromOffset(12, 12),
         BorderSizePixel  = 0,
         Parent           = ToggleBg,
+        ZIndex           = 13,
     })
 
     New("UICorner", {
@@ -917,6 +920,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Font             = Enum.Font.Code,
         TextXAlignment   = Enum.TextXAlignment.Left,
         Parent           = Container,
+        ZIndex           = 12,
     })
 
     -- Divider
@@ -927,6 +931,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size             = UDim2.new(1, 0, 0, 1),
         BorderSizePixel  = 0,
         Parent           = Container,
+        ZIndex           = 11,
     })
 
     -- Click handler
@@ -934,7 +939,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         BackgroundTransparency = 1,
         Size     = UDim2.fromScale(1, 1),
         Text     = "",
-        ZIndex   = 5,
+        ZIndex   = 14,
         Parent   = Container,
     })
 
