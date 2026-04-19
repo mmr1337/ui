@@ -20,11 +20,8 @@ GlobalChat.__index = GlobalChat
 -- ─── Configuration ────────────────────────────────────────────────────────────
 GlobalChat.FirebaseUrl       = "https://apirobloxuser-default-rtdb.firebaseio.com"
 GlobalChat.MessagesPath      = "/globalchat/messages"
-GlobalChat.PMPath            = "/globalchat/pm/messages"
-GlobalChat.MaxMessages       = 20
-GlobalChat.MaxPMMessages     = 20
-GlobalChat.PMFetchLimit      = 200
-GlobalChat.SendCooldown      = 3
+GlobalChat.PMPath            = "/globalchat/pm"
+GlobalChat.MaxMessages       = 50
 GlobalChat.UpdateInterval    = 3
 GlobalChat.BubbleDisplayTime = 10
 -- ──────────────────────────────────────────────────────────────────────────────
@@ -37,23 +34,11 @@ GlobalChat.Enabled        = false
 GlobalChat.ScrollFrame    = nil
 GlobalChat.TextBox        = nil
 GlobalChat.SendButton     = nil
-GlobalChat.InboxOverlay   = nil
-GlobalChat.InboxList      = nil
-GlobalChat.PMOverlay      = nil
-GlobalChat.PMScrollFrame  = nil
-GlobalChat.PMTextBox      = nil
-GlobalChat.PMSendButton   = nil
-GlobalChat.PMTitleLabel   = nil
-GlobalChat.InboxBadge     = nil
-GlobalChat.ActivePMUserId = nil
 
 -- Settings State (defaults: hidden)
 GlobalChat.Settings = {
-    ShowUsername   = false,
-    ShowAvatar    = false,
-    ShowPlaceIcon = false,
-    AllowPM       = false,
-    AllowConnect  = false,
+    HideUsername = true,
+    HideAvatar   = true,
 }
 
 -- Settings Panel State
@@ -74,10 +59,6 @@ local messageHistory   = {}
 local displayedBubbles = {}
 local lastFetchTime    = 0
 local pollingStarted   = false
-local lastSentAt       = 0
-local pmThreads        = {}
-local pmUnreadCounts   = {}
-local pmReadAt         = {}
 
 -- ─── Constants ────────────────────────────────────────────────────────────────
 local HIDDEN_NAME        = "Secret User"
@@ -239,16 +220,12 @@ function GlobalChat:AddMessage(data)
     local L  = self.Library
     if not (SF and L) then return end
 
-    local showAvatar   = self.Settings.ShowAvatar
-    local showUsername = self.Settings.ShowUsername
-    local showPlace    = self.Settings.ShowPlaceIcon
+    local showAvatar   = not self.Settings.HideAvatar
+    local showUsername = not self.Settings.HideUsername
+    local showPlace    = false
 
-    local mutualReveal = self.Settings.AllowConnect and data.allowConnect
-    local canReveal = mutualReveal or (showUsername and not data.anonymous)
-    local avatarVisible = mutualReveal or (showAvatar and canReveal)
-
-    local leftOffset = avatarVisible and 44 or 10
-    local rowHeight  = avatarVisible and 44 or 30
+    local leftOffset = showAvatar and 54 or 10
+    local rowHeight  = showAvatar and 48 or 36
 
     local Row = New("Frame", {
         BackgroundColor3 = L.Scheme.MainColor,
@@ -259,13 +236,15 @@ function GlobalChat:AddMessage(data)
         Parent           = SF,
     })
 
+    -- Accent left border
     New("Frame", {
         BackgroundColor3 = L.Scheme.AccentColor,
-        Size             = UDim2.new(0, 1, 1, 0),
+        Size             = UDim2.new(0, 2, 1, 0),
         BorderSizePixel  = 0,
         Parent           = Row,
     })
 
+    -- Bottom divider
     New("Frame", {
         BackgroundColor3 = L.Scheme.OutlineColor,
         AnchorPoint      = Vector2.new(0, 1),
@@ -275,42 +254,64 @@ function GlobalChat:AddMessage(data)
         Parent           = Row,
     })
 
-    if avatarVisible then
-        local avatarUrl = canReveal and GetThumbnail(data.userId) or HIDDEN_AVATAR
+    -- Avatar (conditional)
+    if showAvatar then
+        local avatarUrl = showUsername and GetThumbnail(data.userId) or HIDDEN_AVATAR
+        
         local Av = New("ImageLabel", {
             BackgroundColor3 = L.Scheme.BackgroundColor,
-            Position         = UDim2.fromOffset(8, 8),
-            Size             = UDim2.fromOffset(24, 24),
+            Position         = UDim2.fromOffset(8, 4),
+            Size             = UDim2.fromOffset(40, 40),
             Image            = avatarUrl,
             BorderSizePixel  = 0,
             Parent           = Row,
         })
+
         New("UIStroke", {
             Color           = L.Scheme.OutlineColor,
             Thickness       = 1,
             ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
             Parent          = Av,
         })
+
+        New("UICorner", {
+            CornerRadius = UDim.new(0, 4),
+            Parent       = Av,
+        })
     end
 
+    -- Place icon (small, next to name)
     local nameOffset = leftOffset
     if showPlace and data.gameId then
         local PlaceIcon = New("ImageLabel", {
             BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(leftOffset, 6),
-            Size     = UDim2.fromOffset(12, 12),
+            Position = UDim2.fromOffset(leftOffset, showAvatar and 6 or 4),
+            Size     = UDim2.fromOffset(14, 14),
             Image    = GetPlaceIcon(data.gameId),
             Parent   = Row,
         })
-        nameOffset = nameOffset + 16
+        New("UICorner", {
+            CornerRadius = UDim.new(0, 2),
+            Parent       = PlaceIcon,
+        })
+        nameOffset = nameOffset + 18
     end
 
-    local displayName = canReveal and (data.displayName .. " (@" .. data.username .. ")") or HIDDEN_NAME
+    -- Name label
+    local displayName
+    if showUsername then
+        displayName = data.displayName .. " (@" .. data.username .. ")"
+    else
+        displayName = HIDDEN_NAME
+    end
+
+    local nameY = showAvatar and 5 or 2
+    local msgY  = showAvatar and 22 or 16
 
     New("TextLabel", {
         BackgroundTransparency = 1,
-        Position         = UDim2.fromOffset(nameOffset, 5),
-        Size             = UDim2.new(1, -(nameOffset + 44), 0, 14),
+        Position         = UDim2.fromOffset(nameOffset, nameY),
+        Size             = UDim2.new(1, -(nameOffset + 4), 0, 16),
         Text             = displayName,
         TextColor3       = L.Scheme.AccentColor,
         TextSize         = 12,
@@ -320,40 +321,22 @@ function GlobalChat:AddMessage(data)
         Parent           = Row,
     })
 
-    if data.userId ~= Players.LocalPlayer.UserId and data.allowPM then
-        local PMBtn = New("TextButton", {
-            BackgroundColor3 = L.Scheme.BackgroundColor,
-            BorderSizePixel  = 0,
-            AnchorPoint      = Vector2.new(1, 0),
-            Position         = UDim2.new(1, -6, 0, 4),
-            Size             = UDim2.fromOffset(30, 14),
-            Text             = "PM",
-            TextColor3       = L.Scheme.FontColor,
-            TextSize         = 11,
-            Font             = Enum.Font.Code,
-            AutoButtonColor  = false,
-            Parent           = Row,
-        })
-        New("UIStroke", { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = PMBtn })
-        PMBtn.MouseButton1Click:Connect(function()
-            self:OpenPM(data.userId)
-        end)
-    end
-
+    -- Message text
     New("TextLabel", {
         BackgroundTransparency = 1,
-        Position         = UDim2.fromOffset(leftOffset, avatarVisible and 22 or 15),
-        Size             = UDim2.new(1, -(leftOffset + 8), 0, 14),
+        Position         = UDim2.fromOffset(leftOffset, msgY),
+        Size             = UDim2.new(1, -(leftOffset + 4), 0, showAvatar and 22 or 16),
         Text             = data.message,
         TextColor3       = Color3.fromRGB(200, 200, 200),
-        TextSize         = 12,
+        TextSize         = 13,
         Font             = Enum.Font.Code,
         TextXAlignment   = Enum.TextXAlignment.Left,
-        TextWrapped      = false,
-        TextTruncate     = Enum.TextTruncate.AtEnd,
+        TextWrapped      = true,
+        ClipsDescendants = true,
         Parent           = Row,
     })
 
+    -- Trim old rows
     local rows = {}
     for _, c in ipairs(SF:GetChildren()) do
         if c:IsA("Frame") then
@@ -386,31 +369,21 @@ end
 
 function GlobalChat:SendMessage(message)
     if not request then return end
-    local nowTick = tick()
-    if nowTick - lastSentAt < GlobalChat.SendCooldown then
-        return
-    end
-    lastSentAt = nowTick
-
     local LP = Players.LocalPlayer
+    
+    -- Always send real data to Firebase — display is controlled locally
     local data = {
         userId      = LP.UserId,
         username    = LP.Name,
         displayName = LP.DisplayName,
-        anonymous   = not self.Settings.ShowUsername,
         message     = message,
         timestamp   = os.time(),
         gameId      = game.PlaceId,
         allowPM     = self.Settings.AllowPM,
         allowConnect = self.Settings.AllowConnect,
     }
-
-    -- instantly show locally
-    self:AddMessage(data)
-    Create3DBubble(LP, message, data.timestamp)
-
     task.spawn(function()
-        pcall(function()
+        local ok = pcall(function()
             request({
                 Url     = GlobalChat.FirebaseUrl .. GlobalChat.MessagesPath .. ".json",
                 Method  = "POST",
@@ -418,6 +391,9 @@ function GlobalChat:SendMessage(message)
                 Body    = HttpService:JSONEncode(data),
             })
         end)
+        if ok then
+            Create3DBubble(LP, message, data.timestamp)
+        end
     end)
 end
 
@@ -456,376 +432,6 @@ function GlobalChat:FetchAndUpdate()
     end
 end
 
-function GlobalChat:GetPMKey(data)
-    return tostring(data.timestamp) .. '_' .. tostring(data.fromUserId) .. '_' .. tostring(data.toUserId)
-end
-
-function GlobalChat:GetPMDisplayName(msg)
-    local mutualReveal = self.Settings.AllowConnect and msg.fromAllowConnect
-    if msg.fromAnonymous and not mutualReveal then
-        return HIDDEN_NAME, HIDDEN_AVATAR
-    end
-    return (msg.fromDisplayName or msg.fromUsername or HIDDEN_NAME) .. (msg.fromUsername and (' (@' .. msg.fromUsername .. ')') or ''), GetThumbnail(msg.fromUserId)
-end
-
-function GlobalChat:BuildInboxOverlay()
-    if self.InboxOverlay or not self.ChatWindow then return end
-    local L = self.Library
-    local overlay = New('Frame', {
-        BackgroundColor3 = L.Scheme.BackgroundColor,
-        BorderSizePixel = 0,
-        Position = UDim2.new(1, 0, 0, 29),
-        Size = UDim2.new(1, 0, 1, -73),
-        Visible = false,
-        ZIndex = 20,
-        ClipsDescendants = true,
-        Parent = self.ChatWindow,
-    })
-    New('UIStroke', { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = overlay })
-    New('TextLabel', {
-        BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(8, 6),
-        Size = UDim2.new(1, -16, 0, 18),
-        Text = 'Private Messages',
-        TextColor3 = L.Scheme.FontColor,
-        TextSize = 12,
-        Font = Enum.Font.Code,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex = 21,
-        Parent = overlay,
-    })
-    local list = New('ScrollingFrame', {
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        Position = UDim2.fromOffset(0, 28),
-        Size = UDim2.new(1, 0, 1, -28),
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        CanvasSize = UDim2.fromScale(0, 0),
-        ScrollBarThickness = 3,
-        ScrollBarImageColor3 = L.Scheme.AccentColor,
-        Parent = overlay,
-    })
-    New('UIListLayout', { SortOrder = Enum.SortOrder.LayoutOrder, Parent = list })
-    self.InboxOverlay = overlay
-    self.InboxList = list
-end
-
-function GlobalChat:RefreshInboxBadge()
-    if not self.InboxBadge then return end
-    local total = 0
-    for _, count in pairs(pmUnreadCounts) do total += count end
-    self.InboxBadge.Visible = total > 0
-    self.InboxBadge.Text = tostring(total)
-end
-
-function GlobalChat:RefreshInboxList()
-    if not self.InboxList then return end
-    for _, c in ipairs(self.InboxList:GetChildren()) do
-        if not c:IsA('UIListLayout') then c:Destroy() end
-    end
-    local L = self.Library
-    local entries = {}
-    for peerId, thread in pairs(pmThreads) do
-        if #thread > 0 then
-            table.insert(entries, { peerId = peerId, last = thread[#thread] })
-        end
-    end
-    table.sort(entries, function(a, b) return (a.last.timestamp or 0) > (b.last.timestamp or 0) end)
-    if #entries == 0 then
-        New('TextLabel', {
-            BackgroundTransparency = 1,
-            Size = UDim2.new(1, -16, 0, 20),
-            Position = UDim2.fromOffset(8, 8),
-            Text = 'No PM messages yet',
-            TextColor3 = Color3.fromRGB(160,160,160),
-            TextSize = 12,
-            Font = Enum.Font.Code,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            Parent = self.InboxList,
-        })
-        return
-    end
-    for _, entry in ipairs(entries) do
-        local title = ((self.Settings.AllowConnect and entry.last.fromAllowConnect) or not entry.last.fromAnonymous) and ((entry.last.fromDisplayName or entry.last.fromUsername or HIDDEN_NAME) .. (entry.last.fromUsername and (' (@' .. entry.last.fromUsername .. ')') or '')) or HIDDEN_NAME
-        local unread = pmUnreadCounts[entry.peerId] or 0
-        local row = New('TextButton', {
-            BackgroundColor3 = L.Scheme.MainColor,
-            BorderSizePixel = 0,
-            Size = UDim2.new(1, 0, 0, 42),
-            Text = '',
-            AutoButtonColor = false,
-            Parent = self.InboxList,
-        })
-        New('Frame', { BackgroundColor3 = L.Scheme.AccentColor, Size = UDim2.new(0,2,1,0), BorderSizePixel = 0, Parent = row })
-        New('TextLabel', {
-            BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(8, 4),
-            Size = UDim2.new(1, -50, 0, 16),
-            Text = title,
-            TextColor3 = L.Scheme.AccentColor,
-            TextSize = 12,
-            Font = Enum.Font.Code,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            Parent = row,
-        })
-        New('TextLabel', {
-            BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(8, 20),
-            Size = UDim2.new(1, -50, 0, 16),
-            Text = tostring(entry.last.message),
-            TextColor3 = Color3.fromRGB(200,200,200),
-            TextSize = 12,
-            Font = Enum.Font.Code,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            TextTruncate = Enum.TextTruncate.AtEnd,
-            Parent = row,
-        })
-        if unread > 0 then
-            local badge = New('TextLabel', {
-                BackgroundColor3 = L.Scheme.AccentColor,
-                BorderSizePixel = 0,
-                AnchorPoint = Vector2.new(1, 0.5),
-                Position = UDim2.new(1, -8, 0.5, 0),
-                Size = UDim2.fromOffset(22, 22),
-                Text = tostring(unread),
-                TextColor3 = Color3.fromRGB(10,10,10),
-                TextSize = 11,
-                Font = Enum.Font.Code,
-                Parent = row,
-            })
-            New('UICorner', { CornerRadius = UDim.new(1,0), Parent = badge })
-        end
-        row.MouseButton1Click:Connect(function()
-            self:OpenPM(entry.peerId)
-        end)
-    end
-end
-
-function GlobalChat:ToggleInbox()
-    self:BuildInboxOverlay()
-    if not self.InboxOverlay then return end
-    if self.InboxOverlay.Visible then
-        TweenService:Create(self.InboxOverlay, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-            Position = UDim2.new(1, 0, 0, 29),
-        }):Play()
-        task.delay(0.2, function() if self.InboxOverlay then self.InboxOverlay.Visible = false end end)
-    else
-        self:RefreshInboxList()
-        self.InboxOverlay.Visible = true
-        self.InboxOverlay.Position = UDim2.new(1, 0, 0, 29)
-        TweenService:Create(self.InboxOverlay, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Position = UDim2.new(0, 0, 0, 29),
-        }):Play()
-    end
-end
-
-function GlobalChat:BuildPMOverlay()
-    if self.PMOverlay or not self.ChatWindow then return end
-    local L = self.Library
-    local overlay = New('Frame', {
-        BackgroundColor3 = L.Scheme.BackgroundColor,
-        BorderSizePixel = 0,
-        Position = UDim2.new(1, 0, 0, 0),
-        Size = UDim2.fromScale(1, 1),
-        Visible = false,
-        ZIndex = 30,
-        ClipsDescendants = true,
-        Parent = self.ChatWindow,
-    })
-    New('UIStroke', { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = overlay })
-    local titleBar = New('Frame', { BackgroundColor3 = L.Scheme.MainColor, BorderSizePixel = 0, Size = UDim2.new(1,0,0,28), Parent = overlay })
-    New('Frame', { BackgroundColor3 = L.Scheme.AccentColor, Size = UDim2.new(1,0,0,2), BorderSizePixel = 0, Parent = overlay })
-    local backBtn = New('TextButton', { BackgroundTransparency = 1, Position = UDim2.fromOffset(4,2), Size = UDim2.fromOffset(24,24), Text = '', Parent = titleBar })
-    local backIcon = New('ImageLabel', { BackgroundTransparency = 1, Size = UDim2.fromOffset(16,16), Position = UDim2.fromOffset(4,4), Image = GetIcon('arrow-left'), ImageColor3 = L.Scheme.FontColor, Parent = backBtn })
-    backBtn.MouseButton1Click:Connect(function() self:ClosePM() end)
-    local title = New('TextLabel', { BackgroundTransparency = 1, Position = UDim2.fromOffset(32,0), Size = UDim2.new(1,-36,1,0), Text = 'Private Messages', TextColor3 = L.Scheme.FontColor, TextSize = 13, Font = Enum.Font.Code, TextXAlignment = Enum.TextXAlignment.Left, Parent = titleBar })
-    local msgArea = New('Frame', { BackgroundColor3 = L.Scheme.BackgroundColor, BorderSizePixel = 0, Position = UDim2.fromOffset(0,29), Size = UDim2.new(1,0,1,-75), ClipsDescendants = true, Parent = overlay })
-    local sf = New('ScrollingFrame', { BackgroundTransparency = 1, BorderSizePixel = 0, Size = UDim2.fromScale(1,1), CanvasSize = UDim2.fromScale(0,0), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollBarThickness = 3, ScrollBarImageColor3 = L.Scheme.AccentColor, Parent = msgArea })
-    New('UIListLayout', { SortOrder = Enum.SortOrder.LayoutOrder, Parent = sf })
-    local inputArea = New('Frame', { BackgroundColor3 = L.Scheme.MainColor, BorderSizePixel = 0, AnchorPoint = Vector2.new(0,1), Position = UDim2.fromScale(0,1), Size = UDim2.new(1,0,0,44), Parent = overlay })
-    New('Frame', { BackgroundColor3 = L.Scheme.OutlineColor, Size = UDim2.new(1,0,0,1), BorderSizePixel = 0, Parent = inputArea })
-    local tb = New('TextBox', { BackgroundColor3 = L.Scheme.BackgroundColor, BorderSizePixel = 0, Position = UDim2.fromOffset(6,8), Size = UDim2.new(1,-72,0,26), Font = Enum.Font.Code, PlaceholderText = 'Type a PM...', PlaceholderColor3 = Color3.fromRGB(80,80,80), Text = '', TextColor3 = L.Scheme.FontColor, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, ClearTextOnFocus = false, Parent = inputArea })
-    New('UIPadding', { PaddingLeft = UDim.new(0,6), PaddingRight = UDim.new(0,6), Parent = tb })
-    New('UIStroke', { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = tb })
-    local sendBtn = New('TextButton', { BackgroundColor3 = L.Scheme.AccentColor, BorderSizePixel = 0, AnchorPoint = Vector2.new(1,0), Position = UDim2.new(1,-6,0,8), Size = UDim2.fromOffset(58,26), Font = Enum.Font.Code, Text = 'Send', TextColor3 = Color3.fromRGB(10,10,10), TextSize = 13, AutoButtonColor = false, Parent = inputArea })
-    sendBtn.MouseButton1Click:Connect(function()
-        local msg = tb.Text:match('^%s*(.-)%s*$')
-        if not msg or msg == '' then return end
-        tb.Text = ''
-        if self.ActivePMUserId then self:SendPM(self.ActivePMUserId, msg) end
-    end)
-    tb.FocusLost:Connect(function(enter)
-        if not enter then return end
-        local msg = tb.Text:match('^%s*(.-)%s*$')
-        if not msg or msg == '' then return end
-        tb.Text = ''
-        if self.ActivePMUserId then self:SendPM(self.ActivePMUserId, msg) end
-    end)
-    self.PMOverlay = overlay
-    self.PMScrollFrame = sf
-    self.PMTextBox = tb
-    self.PMSendButton = sendBtn
-    self.PMTitleLabel = title
-end
-
-function GlobalChat:AddPMMessageRow(msg)
-    local SF = self.PMScrollFrame
-    local L  = self.Library
-    if not (SF and L) then return end
-    local localUserId = Players.LocalPlayer.UserId
-    local incoming = msg.fromUserId ~= localUserId
-    local displayName, avatarUrl = self:GetPMDisplayName(msg)
-    local row = New('Frame', {
-        BackgroundTransparency = 1,
-        Size = UDim2.new(1, 0, 0, 54),
-        LayoutOrder = msg.timestamp,
-        Parent = SF,
-    })
-    local bubble = New('Frame', {
-        BackgroundColor3 = incoming and L.Scheme.MainColor or L.Scheme.AccentColor,
-        BorderSizePixel = 0,
-        Position = incoming and UDim2.fromOffset(8, 4) or UDim2.new(1, -258, 0, 4),
-        Size = UDim2.new(0, 250, 0, 46),
-        Parent = row,
-    })
-    New('UICorner', { CornerRadius = UDim.new(0, 4), Parent = bubble })
-    New('UIStroke', { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = bubble })
-    New('TextLabel', {
-        BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(8, 4),
-        Size = UDim2.new(1, -16, 0, 14),
-        Text = incoming and displayName or 'You',
-        TextColor3 = incoming and L.Scheme.AccentColor or Color3.fromRGB(10,10,10),
-        TextSize = 12,
-        Font = Enum.Font.Code,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Parent = bubble,
-    })
-    New('TextLabel', {
-        BackgroundTransparency = 1,
-        Position = UDim2.fromOffset(8, 18),
-        Size = UDim2.new(1, -16, 0, 22),
-        Text = tostring(msg.message),
-        TextColor3 = incoming and Color3.fromRGB(200,200,200) or Color3.fromRGB(20,20,20),
-        TextSize = 13,
-        Font = Enum.Font.Code,
-        TextWrapped = true,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        Parent = bubble,
-    })
-end
-
-function GlobalChat:RefreshPMThread(peerId)
-    if not self.PMScrollFrame then return end
-    for _, c in ipairs(self.PMScrollFrame:GetChildren()) do
-        if not c:IsA('UIListLayout') then c:Destroy() end
-    end
-    local thread = pmThreads[peerId] or {}
-    while #thread > GlobalChat.MaxPMMessages do table.remove(thread, 1) end
-    if self.PMTitleLabel then
-        if #thread > 0 then
-            self.PMTitleLabel.Text = 'PM - ' .. self:GetPMDisplayName(thread[#thread])
-        else
-            self.PMTitleLabel.Text = 'Private Messages'
-        end
-    end
-    for _, msg in ipairs(thread) do self:AddPMMessageRow(msg) end
-end
-
-function GlobalChat:OpenPM(peerId)
-    self.ActivePMUserId = peerId
-    pmReadAt[peerId] = os.time()
-    pmUnreadCounts[peerId] = 0
-    self:RefreshInboxBadge()
-    self:BuildPMOverlay()
-    self:RefreshPMThread(peerId)
-    if self.InboxOverlay then self.InboxOverlay.Visible = false end
-    self.PMOverlay.Visible = true
-    self.PMOverlay.Position = UDim2.new(1, 0, 0, 0)
-    TweenService:Create(self.PMOverlay, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.new(0,0,0,0) }):Play()
-end
-
-function GlobalChat:ClosePM()
-    if not self.PMOverlay then return end
-    local overlay = self.PMOverlay
-    TweenService:Create(overlay, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.new(1,0,0,0) }):Play()
-    task.delay(0.2, function() if overlay then overlay.Visible = false end end)
-end
-
-function GlobalChat:SendPM(peerId, message)
-    if not request then return end
-    local nowTick = tick()
-    if nowTick - lastSentAt < GlobalChat.SendCooldown then return end
-    lastSentAt = nowTick
-
-    local LP = Players.LocalPlayer
-    local data = {
-        fromUserId = LP.UserId,
-        toUserId = peerId,
-        fromUsername = LP.Name,
-        fromDisplayName = LP.DisplayName,
-        fromAnonymous = not self.Settings.ShowUsername,
-        fromAllowConnect = self.Settings.AllowConnect,
-        message = message,
-        timestamp = os.time(),
-    }
-    pmThreads[peerId] = pmThreads[peerId] or {}
-    table.insert(pmThreads[peerId], data)
-    while #pmThreads[peerId] > GlobalChat.MaxPMMessages do table.remove(pmThreads[peerId], 1) end
-    self:RefreshPMThread(peerId)
-    task.spawn(function()
-        pcall(function()
-            request({
-                Url = GlobalChat.FirebaseUrl .. GlobalChat.PMPath .. '.json',
-                Method = 'POST',
-                Headers = { ['Content-Type'] = 'application/json' },
-                Body = HttpService:JSONEncode(data),
-            })
-        end)
-    end)
-end
-
-function GlobalChat:FetchPMData()
-    if not request then return end
-    local localUserId = Players.LocalPlayer.UserId
-    local ok, result = pcall(function()
-        local resp = request({
-            Url = GlobalChat.FirebaseUrl .. GlobalChat.PMPath .. '.json?orderBy="$key"&limitToLast=' .. GlobalChat.PMFetchLimit .. '&nocache=' .. math.random(1, 999999),
-            Method = 'GET',
-        })
-        if resp.Success and resp.Body and resp.Body ~= 'null' then
-            return HttpService:JSONDecode(resp.Body)
-        end
-    end)
-    if not (ok and result) then return end
-
-    local newThreads = {}
-    for _, msg in pairs(result) do
-        if msg.fromUserId == localUserId or msg.toUserId == localUserId then
-            local peerId = msg.fromUserId == localUserId and msg.toUserId or msg.fromUserId
-            newThreads[peerId] = newThreads[peerId] or {}
-            table.insert(newThreads[peerId], msg)
-        end
-    end
-    for peerId, thread in pairs(newThreads) do
-        table.sort(thread, function(a,b) return a.timestamp < b.timestamp end)
-        while #thread > GlobalChat.MaxPMMessages do table.remove(thread, 1) end
-        newThreads[peerId] = thread
-        local unread = 0
-        local readAt = pmReadAt[peerId] or 0
-        for _, msg in ipairs(thread) do
-            if msg.toUserId == localUserId and msg.timestamp > readAt then unread = unread + 1 end
-        end
-        pmUnreadCounts[peerId] = unread
-    end
-    pmThreads = newThreads
-    self:RefreshInboxBadge()
-    self:RefreshInboxList()
-    if self.ActivePMUserId and pmThreads[self.ActivePMUserId] then
-        self:RefreshPMThread(self.ActivePMUserId)
-    end
-end
-
 -- ─── Settings Panel ──────────────────────────────────────────────────────────
 
 function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callback)
@@ -838,6 +444,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Parent   = parent,
         GroupTransparency = 1,
         Visible  = false,
+        ZIndex   = 11,
     })
 
     -- Toggle background
@@ -849,11 +456,13 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size            = UDim2.fromOffset(36, 16),
         BorderSizePixel = 0,
         Parent          = Container,
+        ZIndex          = 12,
     })
 
     New("UICorner", {
         CornerRadius = UDim.new(0, 8),
         Parent       = ToggleBg,
+        ZIndex       = 12,
     })
 
     New("UIStroke", {
@@ -872,11 +481,13 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size             = UDim2.fromOffset(12, 12),
         BorderSizePixel  = 0,
         Parent           = ToggleBg,
+        ZIndex           = 13,
     })
 
     New("UICorner", {
         CornerRadius = UDim.new(1, 0),
         Parent       = Knob,
+        ZIndex       = 13,
     })
 
     -- Label
@@ -890,6 +501,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Font             = Enum.Font.Code,
         TextXAlignment   = Enum.TextXAlignment.Left,
         Parent           = Container,
+        ZIndex           = 12,
     })
 
     -- Divider
@@ -900,6 +512,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         Size             = UDim2.new(1, 0, 0, 1),
         BorderSizePixel  = 0,
         Parent           = Container,
+        ZIndex           = 11,
     })
 
     -- Click handler
@@ -907,7 +520,7 @@ function GlobalChat:CreateSettingsToggle(parent, yPos, text, settingKey, callbac
         BackgroundTransparency = 1,
         Size     = UDim2.fromScale(1, 1),
         Text     = "",
-        ZIndex   = 5,
+        ZIndex   = 14,
         Parent   = Container,
     })
 
@@ -1117,33 +730,13 @@ function GlobalChat:BuildSettingsPanel()
     -- ─── Toggle Items ───
     local yOffset = 8
 
-    self:CreateSettingsToggle(content, yOffset, "Show Username & Avatar", "ShowUsername", function(val)
-        if not val then
-            self.Settings.ShowAvatar = false
-        end
+    self:CreateSettingsToggle(content, yOffset, "Hide Username", "HideUsername", function()
         self:ClearAndRefetch()
     end)
     yOffset = yOffset + 34
 
-    self:CreateSettingsToggle(content, yOffset, "Show Avatar", "ShowAvatar", function(val)
-        if val and not self.Settings.ShowUsername then
-            self.Settings.ShowAvatar = false
-            return
-        end
+    self:CreateSettingsToggle(content, yOffset, "Hide Avatar", "HideAvatar", function()
         self:ClearAndRefetch()
-    end)
-    yOffset = yOffset + 34
-
-    self:CreateSettingsToggle(content, yOffset, "Show Place Icon", "ShowPlaceIcon", function(val)
-        self:ClearAndRefetch()
-    end)
-    yOffset = yOffset + 34
-
-    self:CreateSettingsToggle(content, yOffset, "Allow PM Messages", "AllowPM", function(val)
-    end)
-    yOffset = yOffset + 34
-
-    self:CreateSettingsToggle(content, yOffset, "Allow Connect to Server", "AllowConnect", function(val)
     end)
 
     self.SettingsOverlay = overlay
@@ -1235,7 +828,7 @@ function GlobalChat:CreateWindow()
     -- Title label
     New("TextLabel", {
         BackgroundTransparency = 1,
-        Size             = UDim2.new(1, -120, 1, 0),
+        Size             = UDim2.new(1, -80, 1, 0),
         Position         = UDim2.fromOffset(8, 0),
         Text             = "Global Chat",
         TextColor3       = L.Scheme.FontColor,
@@ -1245,54 +838,20 @@ function GlobalChat:CreateWindow()
         Parent           = TitleBar,
     })
 
-
-    local InboxBtn = New("TextButton", {
-        BackgroundColor3 = L.Scheme.BackgroundColor,
-        BorderSizePixel  = 0,
-        AnchorPoint = Vector2.new(1, 0.5),
-        Position    = UDim2.new(1, -96, 0.5, 0),
-        Size        = UDim2.fromOffset(18, 18),
-        Text        = "✉",
-        TextColor3  = L.Scheme.FontColor,
-        TextSize    = 12,
-        Font        = Enum.Font.Code,
-        AutoButtonColor = false,
-        Parent      = TitleBar,
-    })
-    New("UIStroke", { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = InboxBtn })
-
-    local InboxBadge = New("TextLabel", {
-        BackgroundColor3 = L.Scheme.AccentColor,
-        BorderSizePixel  = 0,
-        AnchorPoint      = Vector2.new(1, 0),
-        Position         = UDim2.new(1, 0, 0, 0),
-        Size             = UDim2.fromOffset(14, 14),
-        Text             = "0",
-        TextColor3       = Color3.fromRGB(10, 10, 10),
-        TextSize         = 10,
-        Font             = Enum.Font.Code,
-        Visible          = false,
-        Parent           = InboxBtn,
-    })
-    New("UICorner", { CornerRadius = UDim.new(1, 0), Parent = InboxBadge })
-
     -- ─── Settings Button (with icon) ───
     local SettingsBtn = New("TextButton", {
-        BackgroundColor3 = L.Scheme.BackgroundColor,
-        BorderSizePixel  = 0,
+        BackgroundTransparency = 1,
         AnchorPoint = Vector2.new(1, 0.5),
-        Position    = UDim2.new(1, -72, 0.5, 0),
-        Size        = UDim2.fromOffset(18, 18),
+        Position    = UDim2.new(1, -70, 0.5, 0),
+        Size        = UDim2.fromOffset(24, 24),
         Text        = "",
-        AutoButtonColor = false,
         Parent      = TitleBar,
     })
-    New("UIStroke", { Color = L.Scheme.OutlineColor, Thickness = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = SettingsBtn })
 
     local settingsIcon = New("ImageLabel", {
         BackgroundTransparency = 1,
-        Size        = UDim2.fromOffset(12, 12),
-        Position    = UDim2.fromOffset(3, 3),
+        Size        = UDim2.fromOffset(16, 16),
+        Position    = UDim2.fromOffset(4, 4),
         Image       = GetIcon("settings"),
         ImageColor3 = L.Scheme.FontColor,
         Parent      = SettingsBtn,
@@ -1319,16 +878,12 @@ function GlobalChat:CreateWindow()
         self:ToggleSettings()
     end)
 
-    InboxBtn.MouseButton1Click:Connect(function()
-        self:ToggleInbox()
-    end)
-
     -- Online count label
     local OnlineLabel = New("TextLabel", {
         BackgroundTransparency = 1,
         AnchorPoint      = Vector2.new(1, 0.5),
         Position         = UDim2.new(1, -8, 0.5, 0),
-        Size             = UDim2.fromOffset(72, 20),
+        Size             = UDim2.fromOffset(60, 20),
         Text             = "● online",
         TextColor3       = L.Scheme.AccentColor,
         TextSize         = 11,
@@ -1519,7 +1074,6 @@ function GlobalChat:CreateWindow()
     self.TextBox     = TB
     self.SendButton  = SendBtn
     self.OnlineLabel = OnlineLabel
-    self.InboxBadge  = InboxBadge
 
     -- Registry
     L:AddToRegistry(ChatFrame, { BackgroundColor3 = "BackgroundColor" })
@@ -1545,7 +1099,6 @@ function GlobalChat:StartPolling()
             local now = tick()
             if now - lastFetchTime >= GlobalChat.UpdateInterval then
                 self:FetchAndUpdate()
-                self:FetchPMData()
                 lastFetchTime = now
             end
             task.wait(1)
